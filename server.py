@@ -5,23 +5,14 @@ import requests
 from fpdf import FPDF
 from flask import Flask
 
-# ==========================================
-# 1. SUPABASE CONNECTION
-# ==========================================
 SUPABASE_URL = "https://qxzydznbejrorfzjezxg.supabase.co"
-
-# We removed the hardcoded key. It now securely pulls it from Render.com's secret vault!
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# ==========================================
-# 2. PDF GENERATOR CLASS
-# ==========================================
 class PDFCertificate(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 20)
         self.set_text_color(44, 62, 80)
         self.cell(0, 15, 'COSMIC FIELD INSPECTOR', 0, 1, 'C')
-        
         self.set_font('Arial', 'B', 14)
         self.set_text_color(100, 100, 100)
         self.cell(0, 10, 'OFFICIAL ELECTRICAL INSPECTION CERTIFICATE (EICR)', 0, 1, 'C')
@@ -33,23 +24,21 @@ class PDFCertificate(FPDF):
         self.set_text_color(128)
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
-# ==========================================
-# 3. BACKGROUND AUTOMATION ENGINE
-# ==========================================
 def run_background_loop():
     print("🚀 [BACKGROUND] PDF Engine Started!")
     
     if not SUPABASE_KEY:
-        print("❌ CRITICAL ERROR: No Supabase Key found in environment variables!")
+        print("❌ CRITICAL ERROR: The SUPABASE_KEY is completely blank in Render!")
         return
         
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_KEY.strip(), # .strip() removes accidental spaces!
+        "Authorization": f"Bearer {SUPABASE_KEY.strip()}",
         "Content-Type": "application/json"
     }
     
     processed_ids = set()
+    print("📡 [SYSTEM] Successfully connected to loop. Waiting for Netlify App data...")
     
     while True:
         try:
@@ -58,7 +47,9 @@ def run_background_loop():
             
             if response.status_code == 200:
                 data = response.json()
-                if data:
+                if not data:
+                    pass # Data is just empty, waiting for new inspection...
+                elif data:
                     inspection = data[0]
                     insp_id = inspection['id']
                     
@@ -67,9 +58,8 @@ def run_background_loop():
                         payload = inspection.get('payload', {})
                         circuit_name = str(payload.get('circuit_name', 'N/A'))
                         
-                        print(f"🔔 [NEW DATA] Generating PDF for {circuit_name}...")
+                        print(f"\n🔔 [NEW DATA] Caught inspection for: {circuit_name}! Generating PDF...")
                         
-                        # Generate PDF
                         pdf = PDFCertificate()
                         pdf.add_page()
                         
@@ -103,28 +93,30 @@ def run_background_loop():
                         filename = f"Certificate_{insp_id[:8]}.pdf"
                         pdf.output(filename)
                         
-                        # Upload to Cloud
                         with open(filename, 'rb') as f:
                             pdf_bytes = f.read()
                             
                         upload_endpoint = f"{SUPABASE_URL}/storage/v1/object/certificates/{filename}"
                         upload_headers = {
-                            "apikey": SUPABASE_KEY,
-                            "Authorization": f"Bearer {SUPABASE_KEY}",
+                            "apikey": SUPABASE_KEY.strip(),
+                            "Authorization": f"Bearer {SUPABASE_KEY.strip()}",
                             "Content-Type": "application/pdf"
                         }
                         
-                        requests.post(upload_endpoint, headers=upload_headers, data=pdf_bytes)
-                        print(f"✅ [SUCCESS] {filename} uploaded to cloud!")
+                        upload_res = requests.post(upload_endpoint, headers=upload_headers, data=pdf_bytes)
+                        if upload_res.status_code in (200, 201):
+                            print(f"✅ [SUCCESS] {filename} uploaded to cloud!")
+                        else:
+                            print(f"❌ [UPLOAD FAILED] Database blocked the upload: {upload_res.text}")
+            else:
+                # LOUD MODE: Tell us exactly why the database rejected the connection!
+                print(f"❌ [DATABASE REJECTION] Supabase refused connection. Code: {response.status_code} | Reason: {response.text}")
 
         except Exception as e:
-            print(f"⚠️ [WARNING] Network blip: {e}")
+            print(f"⚠️ [WARNING] System Error: {e}")
             
-        time.sleep(3) # Check database every 3 seconds
+        time.sleep(3)
 
-# ==========================================
-# 4. WEB SERVER (KEEPS THE CLOUD AWAKE)
-# ==========================================
 app = Flask(__name__)
 
 @app.route('/')

@@ -103,13 +103,14 @@ def run_background_loop():
                         upload_headers = {
                             "apikey": SUPABASE_KEY.strip(),
                             "Authorization": f"Bearer {SUPABASE_KEY.strip()}",
-                            "Content-Type": "application/pdf",
-                            "x-upsert": "true" # 2. Tell Supabase to overwrite if file already exists
+                            "Content-Type": "application/pdf"
                         }
                         
                         upload_res = requests.post(upload_endpoint, headers=upload_headers, data=pdf_bytes)
                         if upload_res.status_code in (200, 201):
                             print(f"✅ [SUCCESS] {filename} uploaded to cloud!", flush=True)
+                        elif upload_res.status_code == 409:
+                            print(f"☑️ [ALREADY EXISTS] {filename} is already in the cloud. Skipping.", flush=True)
                         else:
                             print(f"❌ [UPLOAD FAILED] Database blocked the upload: {upload_res.text}", flush=True)
             else:

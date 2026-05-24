@@ -43,10 +43,8 @@ def run_background_loop():
     
     while True:
         try:
-            # We add a live timestamp (&_ts=...) so the URL is completely unique every 3 seconds. 
-            # This completely destroys the API cache and guarantees fresh data.
-            current_time = int(time.time())
-            endpoint = f"{SUPABASE_URL}/rest/v1/inspections?select=*&order=created_at.desc&limit=1&_ts={current_time}"
+            # Removed the _ts parameter because Supabase PostgREST tries to read it as a column filter!
+            endpoint = f"{SUPABASE_URL}/rest/v1/inspections?select=*&order=created_at.desc&limit=1"
             
             response = requests.get(endpoint, headers=headers)
             

@@ -55,6 +55,9 @@ def run_background_loop():
                     insp_id = inspection['id']
                     
                     if insp_id not in processed_ids:
+                        # 1. Mark as processed immediately to prevent infinite loops on error!
+                        processed_ids.add(insp_id)
+                        
                         payload = inspection.get('payload', {})
                         circuit_name = str(payload.get('circuit_name', 'N/A'))
                         
@@ -100,14 +103,13 @@ def run_background_loop():
                         upload_headers = {
                             "apikey": SUPABASE_KEY.strip(),
                             "Authorization": f"Bearer {SUPABASE_KEY.strip()}",
-                            "Content-Type": "application/pdf"
+                            "Content-Type": "application/pdf",
+                            "x-upsert": "true" # 2. Tell Supabase to overwrite if file already exists
                         }
                         
                         upload_res = requests.post(upload_endpoint, headers=upload_headers, data=pdf_bytes)
                         if upload_res.status_code in (200, 201):
                             print(f"✅ [SUCCESS] {filename} uploaded to cloud!", flush=True)
-                            # ONLY add to processed_ids if the upload actually succeeds!
-                            processed_ids.add(insp_id) 
                         else:
                             print(f"❌ [UPLOAD FAILED] Database blocked the upload: {upload_res.text}", flush=True)
             else:

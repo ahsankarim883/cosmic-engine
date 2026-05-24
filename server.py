@@ -1,205 +1,135 @@
-import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../auth/login_screen.dart';
-import '../inspection/template_selector_screen.dart';
+import os
+import time
+import threading
+import requests
+from fpdf import FPDF
+from flask import Flask
 
-class DashboardScreen extends StatelessWidget {
-  const DashboardScreen({Key? key}) : super(key: key);
+SUPABASE_URL = "https://qxzydznbejrorfzjezxg.supabase.co"
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-  void _signOut(BuildContext context) async {
-    await Supabase.instance.client.auth.signOut();
-    if (context.mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginScreen()),
-      );
+class PDFCertificate(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 20)
+        self.set_text_color(44, 62, 80)
+        self.cell(0, 15, 'COSMIC FIELD INSPECTOR', 0, 1, 'C')
+        self.set_font('Arial', 'B', 14)
+        self.set_text_color(100, 100, 100)
+        self.cell(0, 10, 'OFFICIAL ELECTRICAL INSPECTION CERTIFICATE (EICR)', 0, 1, 'C')
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.set_text_color(128)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+def run_background_loop():
+    print("🚀 [BACKGROUND] PDF Engine Started!", flush=True)
+    
+    if not SUPABASE_KEY:
+        print("❌ CRITICAL ERROR: The SUPABASE_KEY is blank in Render!", flush=True)
+        return
+        
+    headers = {
+        "apikey": SUPABASE_KEY.strip(),
+        "Authorization": f"Bearer {SUPABASE_KEY.strip()}",
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache" # Prevent caching
     }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final user = Supabase.instance.client.auth.currentUser;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('COSMIC DASHBOARD'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Sign Out',
-            onPressed: () => _signOut(context),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Welcome Card
-              Card(
-                color: const Color(0xFF2C3E50),
-                child: Padding(
-                  padding: const EdgeInsets.all(20.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Welcome back,',
-                        style: TextStyle(color: Colors.white70, fontSize: 16),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        user?.email ?? 'Engineer',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Action Button
-              ElevatedButton.icon(
-                icon: const Icon(Icons.add_task),
-                label: const Text('START NEW INSPECTION'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                ),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => const TemplateSelectorScreen()),
-                  );
-                },
-              ),
-              const SizedBox(height: 32),
-
-              // Recent Activity Title
-              const Text(
-                'Recent Certificates',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2C3E50),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Real-Time Database Stream
-              Expanded(
-                child: StreamBuilder<List<Map<String, dynamic>>>(
-                  stream: Supabase.instance.client
-                      .from('inspections')
-                      .stream(primaryKey: ['id'])
-                      .eq('engineer_id', user?.id ?? '')
-                      .order('created_at', ascending: false), // Newest first
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                          child: CircularProgressIndicator(color: Color(0xFFF9A826)));
-                    }
+    
+    processed_ids = set()
+    print("📡 [SYSTEM] Successfully connected to loop. Waiting for Netlify App data...", flush=True)
+    
+    while True:
+        try:
+            # We add a live timestamp (&_ts=...) so the URL is completely unique every 3 seconds. 
+            # This completely destroys the API cache and guarantees fresh data.
+            current_time = int(time.time())
+            endpoint = f"{SUPABASE_URL}/rest/v1/inspections?select=*&order=created_at.desc&limit=1&_ts={current_time}"
+            
+            response = requests.get(endpoint, headers=headers)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data:
+                    inspection = data[0]
+                    insp_id = inspection['id']
                     
-                    if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                      return Center(
-                        child: Text(
-                          'No inspections yet. Start one above!',
-                          style: TextStyle(color: Colors.grey.shade500),
-                        ),
-                      );
-                    }
-
-                    final inspections = snapshot.data!;
-
-                    return ListView.builder(
-                      itemCount: inspections.length,
-                      itemBuilder: (context, index) {
-                        final insp = inspections[index];
-                        final payload = insp['payload'] ?? {};
-                        final circuitName = payload['circuit_name'] ?? 'Unknown Circuit';
+                    if insp_id not in processed_ids:
+                        payload = inspection.get('payload', {})
+                        circuit_name = str(payload.get('circuit_name', 'N/A'))
                         
-                        // Grab the first 8 characters of the ID (Matches Python Script exactly)
-                        final String fullId = insp['id'].toString();
-                        final String shortId = fullId.length >= 8 ? fullId.substring(0, 8) : fullId;
+                        print(f"\n🔔 [NEW DATA] Caught inspection for: {circuit_name}! Generating PDF...", flush=True)
                         
-                        // The exact URL where the Python script puts the PDF
-                        final pdfUrl = 'https://qxzydznbejrorfzjezxg.supabase.co/storage/v1/object/public/certificates/Certificate_$shortId.pdf';
+                        pdf = PDFCertificate()
+                        pdf.add_page()
+                        
+                        pdf.set_font('Arial', 'B', 12)
+                        pdf.set_text_color(0, 0, 0)
+                        pdf.cell(0, 10, 'INSPECTION DETAILS', 0, 1, 'L')
+                        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+                        pdf.ln(5)
+                        
+                        pdf.set_font('Arial', '', 11)
+                        pdf.cell(50, 8, 'Circuit / Asset Name:', 0, 0)
+                        pdf.cell(0, 8, circuit_name, 0, 1)
+                        pdf.cell(50, 8, 'Location:', 0, 0)
+                        pdf.cell(0, 8, str(payload.get('location', 'N/A')), 0, 1)
+                        pdf.ln(10)
+                        
+                        visual_pass = "PASS" if payload.get('visual_check_pass') else "FAIL"
+                        earth_pass = "PASS" if payload.get('earth_loop_pass') else "FAIL"
+                        
+                        pdf.set_font('Arial', 'B', 12)
+                        pdf.cell(0, 10, 'SAFETY CHECKS', 0, 1, 'L')
+                        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+                        pdf.ln(5)
+                        
+                        pdf.set_font('Arial', '', 11)
+                        pdf.cell(80, 8, 'Visual Inspection Satisfactory:', 0, 0)
+                        pdf.cell(0, 8, visual_pass, 0, 1)
+                        pdf.cell(80, 8, 'Earth Loop Impedance (Zs):', 0, 0)
+                        pdf.cell(0, 8, earth_pass, 0, 1)
+                        
+                        filename = f"Certificate_{insp_id[:8]}.pdf"
+                        pdf.output(filename)
+                        
+                        with open(filename, 'rb') as f:
+                            pdf_bytes = f.read()
+                            
+                        upload_endpoint = f"{SUPABASE_URL}/storage/v1/object/certificates/{filename}"
+                        upload_headers = {
+                            "apikey": SUPABASE_KEY.strip(),
+                            "Authorization": f"Bearer {SUPABASE_KEY.strip()}",
+                            "Content-Type": "application/pdf"
+                        }
+                        
+                        upload_res = requests.post(upload_endpoint, headers=upload_headers, data=pdf_bytes)
+                        if upload_res.status_code in (200, 201):
+                            print(f"✅ [SUCCESS] {filename} uploaded to cloud!", flush=True)
+                            # ONLY add to processed_ids if the upload actually succeeds!
+                            processed_ids.add(insp_id) 
+                        else:
+                            print(f"❌ [UPLOAD FAILED] Database blocked the upload: {upload_res.text}", flush=True)
+            else:
+                print(f"❌ [DATABASE REJECTION] Code: {response.status_code} | Reason: {response.text}", flush=True)
 
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          elevation: 2,
-                          child: ListTile(
-                            leading: const Icon(Icons.picture_as_pdf, color: Colors.redAccent, size: 36),
-                            title: Text(circuitName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                            subtitle: const Text('PDF Certificate Available'),
-                            trailing: ElevatedButton(
-                              onPressed: () {
-                                _showPdfDialog(context, pdfUrl, circuitName);
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF2C3E50),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
-                              child: const Text('VIEW PDF'),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+        except Exception as e:
+            print(f"⚠️ [WARNING] System Error: {e}", flush=True)
+            
+        time.sleep(3)
 
-  // The dialog that gives the client the live link
-  void _showPdfDialog(BuildContext context, String pdfUrl, String circuitName) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Certificate: $circuitName'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Our backend automation engine has processed your inspection.'),
-            const SizedBox(height: 16),
-            const Text('Secure PDF Link:', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(12),
-              color: Colors.grey.shade100,
-              child: SelectableText(
-                pdfUrl,
-                style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              '👉 Highlight the link above, right-click, and select "Go to" or copy/paste it into a new tab.',
-              style: TextStyle(fontSize: 12, color: Colors.grey, fontStyle: FontStyle.italic),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('CLOSE'),
-          ),
-        ],
-      ),
-    );
-  }
-}
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "✅ Cosmic Field PDF Engine is online and listening 24/7!"
+
+if __name__ == "__main__":
+    listener_thread = threading.Thread(target=run_background_loop)
+    listener_thread.daemon = True
+    listener_thread.start()
+    
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
